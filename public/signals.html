@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>AI Signals | AI Trader</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+<link rel="stylesheet" href="/css/style.css"/>
+</head>
+<body>
+<div class="app-shell" id="app-shell"><div id="page-content">
+  <div class="page-header animate-in">
+    <div class="page-title">AI Signals</div>
+    <div class="page-sub">Every signal — qualifying and rejected — refreshes every 10s</div>
+  </div>
+
+  <div class="stat-grid animate-in mb-16" id="stats-grid">
+    <div class="stat-card"><div class="stat-label">Total Signals</div><div class="stat-value" id="stat-total">—</div></div>
+    <div class="stat-card"><div class="stat-label">Executed</div><div class="stat-value pos" id="stat-exec">—</div></div>
+    <div class="stat-card"><div class="stat-label">Rejected</div><div class="stat-value neg" id="stat-rej">—</div></div>
+    <div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value accent" id="stat-pend">—</div></div>
+  </div>
+
+  <div class="card animate-in mb-16">
+    <div class="flex justify-between items-center mb-12">
+      <div class="fw-700">Qualifying Signals (≥85% confidence)</div>
+      <div class="flex gap-8">
+        <button class="btn btn-ghost btn-sm" id="show-rejected-btn" onclick="toggleRejected()">Show Rejected</button>
+        <span id="last-refresh" class="text-xs text-3" style="line-height:32px;"></span>
+      </div>
+    </div>
+    <div class="table-wrap" id="tbl"><div class="empty-state">No qualifying signals yet. Waiting for engine…</div></div>
+  </div>
+
+  <div class="card animate-in" id="rejected-panel" style="display:none;">
+    <div class="fw-700 mb-12">Rejected Signals (with reasons)</div>
+    <div class="table-wrap" id="rej-tbl"><div class="empty-state">No rejected signals.</div></div>
+  </div>
+</div></div>
+<script src="/js/api.js"></script><script src="/js/auth.js"></script><script src="/js/layout.js"></script>
+<script>
+let showRej=false;
+function toggleRejected(){
+  showRej=!showRej;
+  document.getElementById('rejected-panel').style.display=showRej?'block':'none';
+  document.getElementById('show-rejected-btn').textContent=showRej?'Hide Rejected':'Show Rejected';
+}
+
+async function load(){
+  try{
+    // Stats
+    const stats = await Api.get('/api/signals/stats');
+    document.getElementById('stat-total').textContent = stats.total||0;
+    document.getElementById('stat-exec').textContent  = stats.executed||0;
+    document.getElementById('stat-rej').textContent   = stats.rejected||0;
+    document.getElementById('stat-pend').textContent  = stats.pending||0;
+
+    // Qualifying signals
+    const {signals} = await Api.get('/api/signals');
+    const tbl = document.getElementById('tbl');
+    tbl.innerHTML = signals.length
+      ? `<table><thead><tr><th>Time</th><th>Symbol</th><th>Dir</th><th>Conf</th><th>Trend</th><th>Vol</th><th>Mom</th><th>SMC</th><th>R:R</th><th>Status</th></tr></thead><tbody>
+          ${signals.map(s=>`<tr>
+            <td class="text-xs text-3 nowrap">${new Date(s.created_at*1000).toLocaleTimeString()}</td>
+            <td class="fw-700">${s.symbol}</td>
+            <td>${s.direction==='long'?'<span class="badge badge-green">L</span>':'<span class="badge badge-red">S</span>'}</td>
+            <td class="${s.confidence>=85?'pos fw-600':'text-1'}">${s.confidence}%</td>
+            <td>${s.trend_confirmed?'✅':'—'}</td>
+            <td>${s.volume_confirmed?'✅':'—'}</td>
+            <td>${s.momentum_confirmed?'✅':'—'}</td>
+            <td>${s.smc_confirmed?'✅':'—'}</td>
+            <td class="text-2">1:${(s.risk_reward||0).toFixed(1)}</td>
+            <td><span class="badge ${s.status==='executed'?'badge-green':s.status==='expired'?'badge-yellow':'badge-gray'}">${s.status}</span></td>
+          </tr>`).join('')}
+        </tbody></table>`
+      : '<div class="empty-state">No qualifying signals yet — scanner is running.</div>';
+
+    // Rejected signals
+    if(showRej){
+      const {signals:rej} = await Api.get('/api/signals/rejected');
+      const rt = document.getElementById('rej-tbl');
+      rt.innerHTML = rej.length
+        ? `<table><thead><tr><th>Time</th><th>Symbol</th><th>Dir</th><th>Conf</th><th>R:R</th><th>Reason</th></tr></thead><tbody>
+            ${rej.map(s=>`<tr>
+              <td class="text-xs text-3 nowrap">${new Date(s.created_at*1000).toLocaleTimeString()}</td>
+              <td class="fw-600">${s.symbol}</td>
+              <td>${s.direction==='long'?'↑':'↓'}</td>
+              <td class="text-3">${s.confidence}%</td>
+              <td class="text-3">1:${(s.risk_reward||0).toFixed(1)}</td>
+              <td class="neg text-xs">${s.reject_reason||'—'}</td>
+            </tr>`).join('')}
+          </tbody></table>`
+        : '<div class="empty-state">No rejected signals logged.</div>';
+    }
+
+    document.getElementById('last-refresh').textContent = 'Updated '+new Date().toLocaleTimeString();
+  }catch(e){ console.error(e); }
+}
+load(); setInterval(load,10000);
+</script>
+</body></html>

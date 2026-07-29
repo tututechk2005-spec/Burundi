@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Settings | AI Trader</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+<link rel="stylesheet" href="/css/style.css"/>
+</head>
+<body>
+<div class="app-shell" id="app-shell"><div id="page-content">
+  <div class="page-header animate-in"><div class="page-title">Settings</div><div class="page-sub">Connect accounts and manage security</div></div>
+
+  <div class="card animate-in mb-16">
+    <div class="fw-700 mb-16">Connect Binance Account</div>
+    <div id="conn-alert"></div>
+    <form id="conn-form">
+      <div class="field"><label>Account Type</label>
+        <select name="accountType" required>
+          <option value="futures_testnet">Futures Testnet (recommended to start)</option>
+          <option value="futures_real">Futures Real</option>
+          <option value="spot_testnet">Spot Testnet</option>
+          <option value="spot_real">Spot Real</option>
+        </select>
+      </div>
+      <div class="field"><label>Label</label><input type="text" name="label" placeholder="e.g. Main Futures Account"/></div>
+      <div class="field"><label>API Key</label><input type="text" name="apiKey" required autocomplete="off" placeholder="Paste your Binance API key"/></div>
+      <div class="field">
+        <label>API Secret</label>
+        <input type="password" name="apiSecret" required autocomplete="off" placeholder="Paste your Binance API secret"/>
+        <div class="hint">Encrypted with AES-256-GCM. Never stored in plain text or returned to the browser.</div>
+      </div>
+      <button class="btn btn-primary btn-block" type="submit" id="conn-btn">
+        <span id="conn-btn-text">Validate &amp; Connect</span>
+        <span id="conn-spinner" style="display:none;">⏳ Validating with Binance…</span>
+      </button>
+    </form>
+  </div>
+
+  <div class="card animate-in mb-16">
+    <div class="fw-700 mb-16">Connected Accounts</div>
+    <div id="accounts-list"><div class="empty-state">Loading…</div></div>
+  </div>
+
+  <div class="grid-2 animate-in">
+    <div class="card">
+      <div class="fw-700 mb-16">Change Password</div>
+      <div id="pw-alert"></div>
+      <form id="pw-form">
+        <div class="field"><label>Current Password</label><input type="password" name="currentPassword" required/></div>
+        <div class="field"><label>New Password (min 8 chars)</label><input type="password" name="newPassword" required minlength="8"/></div>
+        <button class="btn btn-ghost btn-block" type="submit">Update Password</button>
+      </form>
+    </div>
+    <div class="card">
+      <div class="fw-700 mb-16">Current AI &amp; Risk Config</div>
+      <p class="text-xs text-3 mb-16">Platform-wide settings — adjustable by admin only.</p>
+      <div id="settings-view"><div class="empty-state">Loading…</div></div>
+    </div>
+  </div>
+</div></div>
+<script src="/js/api.js"></script><script src="/js/auth.js"></script><script src="/js/layout.js"></script>
+<script>
+const ERROR_MESSAGES = {
+  invalid_api_key:         '❌ Invalid API Key — check it is correct and enabled for this account type.',
+  invalid_signature:       '❌ Invalid API Secret — signature verification failed.',
+  insufficient_permissions:'❌ API Key is missing required permissions. Enable Futures Trading (or Spot Trading) on the key.',
+  futures_disabled:        '❌ Futures trading is disabled on this Binance account. Enable it in Binance settings.',
+  spot_disabled:           '❌ Spot trading is not available for this account type.',
+  timestamp_error:         '⚠️ Server clock out of sync with Binance. Please try again.',
+  rate_limited:            '⚠️ Binance rate limit hit. Wait a moment and try again.',
+  binance_server_error:    '⚠️ Binance server is temporarily unavailable. Try again in a few seconds.',
+  network_timeout:         '⚠️ Network timeout reaching Binance. Check your server connection.',
+  database_error:          '❌ Database error while saving. Please try again.',
+  unknown_error:           '❌ Unexpected error. See details below.',
+};
+
+async function loadAccounts(){
+  try{
+    const {accounts} = await Api.get('/api/binance/accounts');
+    const list = document.getElementById('accounts-list');
+    list.innerHTML = accounts.length ? accounts.map(a=>`
+      <div class="flex justify-between items-center" style="padding:12px 0;border-bottom:1px solid var(--border);">
+        <div>
+          <div class="fw-600">${a.label}</div>
+          <div class="text-xs text-3 mt-4">${a.account_type.replace(/_/g,' ')} · ${a.api_key_masked}</div>
+          ${a.last_verified_at?`<div class="text-xs text-3">Last verified: ${new Date(a.last_verified_at*1000).toLocaleString()}</div>`:''}
+        </div>
+        <div class="flex gap-8 items-center">
+          <span class="badge ${a.is_verified?'badge-green':'badge-red'}">${a.is_verified?'✅ Connected':'❌ Unverified'}</span>
+          <button class="btn btn-ghost btn-sm" onclick="reval(${a.id},this)">Re-verify</button>
+          <button class="btn btn-red btn-sm" onclick="rmv(${a.id})">Remove</button>
+        </div>
+      </div>`).join('') : '<div class="empty-state">No accounts connected yet.</div>';
+  }catch(e){
+    document.getElementById('accounts-list').innerHTML=`<div class="alert alert-error">${e.message}</div>`;
+  }
+}
+
+async function reval(id, btn){
+  btn.disabled=true; btn.textContent='Checking…';
+  try{
+    const r = await Api.post('/api/binance/accounts/'+id+'/revalidate');
+    showConnAlert('success', r.message||'API key is valid and connected.');
+    loadAccounts();
+  }catch(e){
+    const detail = e.detail||{};
+    const friendly = ERROR_MESSAGES[detail.errorType] || e.message;
+    showConnAlert('error', friendly + (detail.detail?`<br/><small>${detail.detail}</small>`:''));
+  }finally{ btn.disabled=false; btn.textContent='Re-verify'; }
+}
+
+async function rmv(id){
+  if(!confirm('Remove this account? Auto-trading will stop for it.')) return;
+  try{
+    await Api.del('/api/binance/accounts/'+id);
+    loadAccounts();
+  }catch(e){ alert(e.message); }
+}
+
+function showConnAlert(type, html){
+  const box = document.getElementById('conn-alert');
+  box.innerHTML = `<div class="alert alert-${type}" style="margin-bottom:12px;">${html}</div>`;
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+document.getElementById('conn-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const btn      = document.getElementById('conn-btn');
+  const btnText  = document.getElementById('conn-btn-text');
+  const spinner  = document.getElementById('conn-spinner');
+  btn.disabled   = true;
+  btnText.style.display  = 'none';
+  spinner.style.display  = 'inline';
+  document.getElementById('conn-alert').innerHTML = '';
+
+  const f = new FormData(e.target);
+  try{
+    const r = await Api.post('/api/binance/accounts/connect', {
+      accountType: f.get('accountType'),
+      label:       f.get('label'),
+      apiKey:      f.get('apiKey'),
+      apiSecret:   f.get('apiSecret'),
+    });
+    showConnAlert('success', '✅ ' + (r.message||'Account connected successfully!'));
+    e.target.reset();
+    loadAccounts();
+  }catch(err){
+    const detail  = err.detail||{};
+    const friendly= ERROR_MESSAGES[detail.errorType] || err.message;
+    const hintHtml= detail.hint?`<br/><small style="opacity:.8;">💡 ${detail.hint}</small>`:'';
+    const rawHtml = detail.detail&&detail.detail!==err.message?`<br/><small style="opacity:.7;">Binance: ${detail.detail}</small>`:'';
+    showConnAlert('error', friendly + hintHtml + rawHtml);
+  }finally{
+    btn.disabled          = false;
+    btnText.style.display = 'inline';
+    spinner.style.display = 'none';
+  }
+});
+
+document.getElementById('pw-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const box = document.getElementById('pw-alert');
+  box.innerHTML = '';
+  const f = new FormData(e.target);
+  try{
+    await Api.post('/api/settings/change-password', {
+      currentPassword: f.get('currentPassword'),
+      newPassword:     f.get('newPassword'),
+    });
+    box.innerHTML='<div class="alert alert-success">✅ Password updated.</div>';
+    e.target.reset();
+  }catch(err){
+    box.innerHTML=`<div class="alert alert-error">${err.message}</div>`;
+  }
+});
+
+async function loadSettingsView(){
+  try{
+    const {aiSettings, riskSettings} = await Api.get('/api/settings');
+    document.getElementById('settings-view').innerHTML=`
+      <div class="flex justify-between text-sm" style="padding:6px 0;border-bottom:1px solid var(--border);"><span class="text-2">Min Confidence</span><strong>${aiSettings.min_confidence}%</strong></div>
+      <div class="flex justify-between text-sm" style="padding:6px 0;border-bottom:1px solid var(--border);"><span class="text-2">Min R:R</span><strong>1:${aiSettings.min_risk_reward}</strong></div>
+      <div class="flex justify-between text-sm" style="padding:6px 0;border-bottom:1px solid var(--border);"><span class="text-2">Timeframes</span><strong>${aiSettings.timeframes||'1m,5m,15m,1h'}</strong></div>
+      <div class="flex justify-between text-sm" style="padding:6px 0;border-bottom:1px solid var(--border);"><span class="text-2">Symbol List</span><strong>${aiSettings.symbols==='ALL_FUTURES_USDT'?'All Futures USDT':aiSettings.symbols}</strong></div>
+      <div class="flex justify-between text-sm" style="padding:6px 0;border-bottom:1px solid var(--border);"><span class="text-2">Max Positions</span><strong>${riskSettings.max_open_positions}</strong></div>
+      <div class="flex justify-between text-sm" style="padding:6px 0;border-bottom:1px solid var(--border);"><span class="text-2">Max Risk/Trade</span><strong>${riskSettings.max_risk_per_trade_pct}%</strong></div>
+      <div class="flex justify-between text-sm" style="padding:6px 0;border-bottom:1px solid var(--border);"><span class="text-2">Stop Loss</span><strong>${riskSettings.stop_loss_pct}%</strong></div>
+      <div class="flex justify-between text-sm" style="padding:6px 0;"><span class="text-2">Take Profit</span><strong>${riskSettings.take_profit_pct}%</strong></div>`;
+  }catch(e){
+    document.getElementById('settings-view').innerHTML=`<div class="text-2 text-sm">${e.message}</div>`;
+  }
+}
+loadAccounts(); loadSettingsView();
+</script>
+</body></html>
